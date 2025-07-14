@@ -238,11 +238,11 @@ def process_and_index_directory(
         directory_path: Path to the directory containing files to process
         drop_existing: Whether to drop the existing collection if it exists
         namespace: Namespace to use for the documents (defaults to Config.NAMESPACE)
-        file_extensions: List of file extensions to process (defaults to ['.pdf', '.jpg', '.jpeg', '.png'])
+        file_extensions: List of file extensions to process (defaults to Config.SUPPORTED_FILE_TYPES)
     """
     directory_path = Path(directory_path) if isinstance(directory_path, str) else directory_path
     namespace = namespace or Config.NAMESPACE
-    file_extensions = file_extensions or ['.pdf', '.jpg', '.jpeg', '.png']
+    file_extensions = file_extensions or Config.SUPPORTED_FILE_TYPES
     
     if not directory_path.exists():
         raise FileNotFoundError(f"Directory {directory_path} does not exist")

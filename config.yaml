@@ -13,6 +13,7 @@ document:
   image_resolution_scale: 2  # Scale factor for image resolution in document processing
   max_tokens: 512  # Maximum number of tokens for chunking
   doc_dir: "doc_sources"  # Directory containing document sources
+  supported_file_types: [".pdf"]  # List of supported file extensions
   picture_description:
     prompt_picture_description: "Describe this image in sentences in a single paragraph."
 

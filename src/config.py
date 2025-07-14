@@ -103,6 +103,7 @@ class Config:
     IMAGE_RESOLUTION_SCALE: int = _loader.get("document", "image_resolution_scale", default=2)
     MAX_TOKENS: int = _loader.get("document", "max_tokens", default=512)
     DOC_DIR: str = _loader.get("document", "doc_dir", default="doc_sources")
+    SUPPORTED_FILE_TYPES: List[str] = _loader.get("document", "supported_file_types", default=[".pdf"])
     PICTURE_DESC_PROMPT: str = _loader.get("document", "picture_description", "prompt_picture_description", default="Describe this image in sentences in a single paragraph.")
     
     # Vector Database Configuration
@@ -175,5 +176,6 @@ DB_NAME = Config.DB_NAME
 DB_COLLECTION_NAME = Config.DB_COLLECTION_NAME
 NAMESPACE = Config.NAMESPACE
 DOC_DIR = Config.DOC_DIR
+SUPPORTED_FILE_TYPES = Config.SUPPORTED_FILE_TYPES
 RETRIEVAL_K = Config.RETRIEVAL_K
 RETRIEVAL_WEIGHTS = Config.RETRIEVAL_WEIGHTS
