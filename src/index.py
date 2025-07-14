@@ -2,9 +2,15 @@
 Indexing module for RAG Multimodal application.
 This module provides functionality to process files in a directory and index them to a vector store.
 
+The module includes comprehensive logging capabilities that can be configured using the set_log_level function.
+
 Usage:
     ```python
-    from src.index import process_and_index_directory
+    from src.index import process_and_index_directory, set_log_level
+    import logging
+    
+    # Configure custom logging (optional)
+    set_log_level(logging.DEBUG, 'custom/path/index.log')
     
     # Process and index all files in a directory
     process_and_index_directory("path/to/documents")
@@ -16,15 +22,28 @@ Usage:
         namespace="custom_namespace"
     )
     ```
+    
+Logging Features:
+    - Console logging (default at INFO level)
+    - File logging (default to 'logs/index.log')
+    - Configurable log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    - Formatted log messages with timestamps
 """
 
 import os
 import copy
+import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
 # Import configuration
 from src.config import Config
+
+# Configure logging
+logger = logging.getLogger(__name__)
+
+# Default log file path
+DEFAULT_LOG_FILE = os.path.join('logs', 'index.log')
 
 # Import document processing libraries
 from docling_core.transforms.chunker.tokenizer.huggingface import HuggingFaceTokenizer
@@ -40,33 +59,79 @@ from docling.chunking import HybridChunker
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
 from langchain_core.documents import Document
-
-# Import vector store libraries
-from langchain_openai import OpenAIEmbeddings
-from langchain_milvus import BM25BuiltInFunction, Milvus
-from pymilvus import Collection, MilvusException, connections, db, utility
 from transformers import AutoTokenizer
 
+# Import our Milvus store module
+from src.milvus_store import MilvusStore
 
-def initialize_vector_store(db_name: str) -> None:
+
+def set_log_level(level=logging.INFO, log_file=None):
     """
-    Initialize the vector store database.
+    Set the logging level for the index module.
     
     Args:
-        db_name: Name of the database to initialize
+        level: Logging level (e.g., logging.DEBUG, logging.INFO, logging.WARNING)
+        log_file: Optional path to log file
+        
+    Example:
+        ```python
+        # Set to debug level with file logging
+        from src.index import set_log_level
+        import logging
+        
+        set_log_level(logging.DEBUG, 'logs/index.log')
+        ```
     """
-    try:
-        existing_databases = db.list_database()
-        if db_name in existing_databases:
-            print(f"Database '{db_name}' already exists.")
-            # Use the database context
-            db.using_database(db_name)
-        else:
-            print(f"Database '{db_name}' does not exist.")
-            db.create_database(db_name)
-            print(f"Database '{db_name}' created successfully.")
-    except MilvusException as e:
-        print(f"An error occurred: {e}")
+    setup_logging(level=level, log_file=log_file)
+    logger.info(f"Log level set to: {logging.getLevelName(level)}")
+
+
+def setup_logging(level=logging.INFO, log_file=None):
+    """
+    Configure logging for the index module.
+    
+    Args:
+        level: Logging level (default: logging.INFO)
+        log_file: Path to log file (default: None, logs to console only)
+    """
+    # Create a formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # Configure the logger
+    logger.setLevel(level)
+    
+    # Remove existing handlers to avoid duplicates
+    for handler in logger.handlers[:]:  
+        logger.removeHandler(handler)
+    
+    # Create console handler and set level
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(level)
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    
+    # Add file handler if log_file is specified
+    if log_file:
+        try:
+            # Create directory for log file if it doesn't exist
+            log_dir = os.path.dirname(log_file)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir)
+                
+            # Create file handler and set level
+            file_handler = logging.FileHandler(log_file)
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            logger.addHandler(file_handler)
+            logger.info(f"Logging to file: {log_file}")
+        except Exception as e:
+            logger.error(f"Failed to set up file logging to {log_file}: {e}")
+    
+    logger.debug("Logging configured for index module")
+
+
+# Configure logging with default settings
+setup_logging(log_file=DEFAULT_LOG_FILE)
 
 
 def get_document_converter() -> DocumentConverter:
@@ -113,45 +178,6 @@ def get_chunker() -> HybridChunker:
     return HybridChunker(
         tokenizer=tokenizer,
         serializer_provider=CustomMDSerializerProvider(),
-    )
-
-
-def get_vector_store(drop_old: bool = False) -> Milvus:
-    """
-    Create and configure a vector store.
-    
-    Args:
-        drop_old: Whether to drop the existing collection if it exists
-        
-    Returns:
-        Milvus: Configured vector store
-    """
-    # Connect to Milvus
-    connections.connect(
-        host=Config.URI.split("://")[1].split(":")[0], 
-        port=int(Config.URI.split(":")[-1])
-    )
-    
-    # Initialize the database
-    initialize_vector_store(Config.DB_NAME)
-    
-    # Create embeddings model
-    embeddings_model = OpenAIEmbeddings(
-        model=Config.EMBED_MODEL,
-        api_key=Config.OPENAI_API_KEY
-    )
-    
-    # Create and return vector store
-    return Milvus(
-        embedding_function=embeddings_model,
-        connection_args=Config.get_milvus_connection_args(),
-        builtin_function=BM25BuiltInFunction(),
-        vector_field=["dense", "sparse"],
-        consistency_level="Strong",
-        drop_old=drop_old,
-        collection_name=Config.DB_COLLECTION_NAME,
-        auto_id=True,
-        partition_key_field="namespace"
     )
 
 
@@ -227,17 +253,17 @@ def process_and_index_directory(
         files.extend(directory_path.glob(f"*{ext}"))
     
     if not files:
-        print(f"No files with extensions {file_extensions} found in {directory_path}")
+        logger.warning(f"No files with extensions {file_extensions} found in {directory_path}")
         return
     
-    print(f"Found {len(files)} files to process")
+    logger.info(f"Found {len(files)} files to process")
     
     # Create document converter and chunker
     converter = get_document_converter()
     chunker = get_chunker()
     
     # Create vector store
-    vector_store = get_vector_store(drop_old=drop_existing)
+    milvus_store = MilvusStore(drop_old=drop_existing, namespace=namespace)
     
     # Process and index each file
     all_docs = []
@@ -245,23 +271,21 @@ def process_and_index_directory(
         if file.name == '.DS_Store':
             continue
         
-        print(f"Processing {file}...")
+        logger.info(f"Processing {file}...")
         try:
             docs = process_file(file, converter, chunker, namespace)
             all_docs.extend(docs)
         except Exception as e:
-            print(f"Error processing {file}: {e}")
+            logger.error(f"Error processing {file}: {e}")
     
     # Index all documents
     if all_docs:
-        print(f"Indexing {len(all_docs)} documents...")
-        try:
-            ids = vector_store.add_documents(documents=all_docs)
-            print(f"Successfully indexed {len(ids)} documents")
-        except Exception as e:
-            print(f"Error indexing documents: {e}")
+        logger.info(f"Indexing {len(all_docs)} documents...")
+        ids = milvus_store.add_documents(documents=all_docs)
+        if not ids:
+            logger.error("Failed to index documents")
     else:
-        print("No documents to index")
+        logger.warning("No documents to index")
 
 
 if __name__ == "__main__":
