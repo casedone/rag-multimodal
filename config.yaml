@@ -1,0 +1,29 @@
+# RAG Multimodal Application Configuration
+
+# Model Configuration
+model:
+  text_generation: "gpt-4.1-mini"  # OpenAI model for text generation
+  embeddings: "text-embedding-3-small"  # OpenAI model for embeddings
+  tokenizer: "sentence-transformers/all-MiniLM-L6-v2"  # Hugging Face model for tokenization
+  url: "https://api.openai.com/v1/chat/completions"
+  timeout: 60
+
+# Docling Document Processing
+document:
+  image_resolution_scale: 2  # Scale factor for image resolution in document processing
+  max_tokens: 512  # Maximum number of tokens for chunking
+  doc_dir: "doc_sources"  # Directory containing document sources
+  picture_description:
+    prompt_picture_description: "Describe this image in sentences in a single paragraph."
+
+# Vector Database Configuration
+database:
+  uri: "http://localhost:19530"  # Milvus database URI
+  name: "rag_multimodal"  # Database name
+  collection_name: "collection_demo"  # Collection name
+  namespace: "CaseDoneDemo"  # Namespace for partitioning data
+
+# Retrieval Configuration
+retrieval:
+  k: 2  # Number of documents to retrieve
+  weights: [0.6, 0.4]  # Weights for hybrid search (dense, sparse)

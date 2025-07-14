@@ -6,8 +6,17 @@ authors = [
     {name = "Pisek",email = "psk.light@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12, <4.0"
 dependencies = [
+    "docling (>=2.40.0,<3.0.0)",
+    "python-dotenv (>=1.1.1,<2.0.0)",
+    "langchain-core (>=0.3.68,<0.4.0)",
+    "langchain-docling (>=1.0.0,<2.0.0)",
+    "pymilvus (>=2.5.12,<3.0.0)",
+    "langchain-openai (>=0.3.27,<0.4.0)",
+    "langchain-milvus (>=0.2.1,<0.3.0)",
+    "langgraph (>=0.5.2,<0.6.0)",
+    "pyyaml (>=6.0.2,<7.0.0)"
 ]
 package-mode = false
 
