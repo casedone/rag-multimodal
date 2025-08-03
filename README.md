@@ -41,14 +41,25 @@ The system provides three ways to access configuration values:
    # Get specialized configuration objects
    milvus_args = Config.get_milvus_connection_args()
    pdf_options = Config.get_pdf_pipeline_options()
+   
+   # Reload configuration from a custom file
+   Config.reload("path/to/custom/config.yaml")
+   
+   # Access updated configuration values
+   updated_model = Config.MODEL
    ```
 
 3. **Using the ConfigLoader for direct YAML access**:
    ```python
    from src.config import ConfigLoader
    
-   config_loader = ConfigLoader()
+   # Create loader with optional custom config path
+   config_loader = ConfigLoader("path/to/custom/config.yaml")
    value = config_loader.get("database", "uri")
+   
+   # Or use default config file
+   default_loader = ConfigLoader()
+   default_value = default_loader.get("database", "uri")
    ```
 
 ### Default Values
