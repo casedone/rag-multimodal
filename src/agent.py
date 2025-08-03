@@ -2,10 +2,11 @@
 Agentic RAG implementation using LangGraph.
 
 This module implements an agentic RAG (Retrieval Augmented Generation) system using LangGraph.
-It integrates with the Milvus vector store for document retrieval and uses a graph-based approach
+It supports multiple vector stores for document retrieval and uses a graph-based approach
 to handle the RAG workflow with advanced features like document grading and question rewriting.
 
 Usage:
+    Single Vector Store (Backward Compatible):
     ```python
     from src.agent import AgenticRAG
     from src.milvus_store import MilvusStore
@@ -14,26 +15,68 @@ Usage:
     milvus_store = MilvusStore()
     
     # Create the agentic RAG system
-    rag_agent = AgenticRAG(milvus_store)
+    rag_agent = AgenticRAG(vector_store=milvus_store)
     
     # Run the RAG system with a query
     response = rag_agent.run("What is the main topic of the document?")
     print(response)
     ```
+    
+    Multiple Vector Stores:
+    ```python
+    from src.agent import AgenticRAG
+    from src.milvus_store import MilvusStore
+    
+    # Initialize multiple vector stores
+    docs_store = MilvusStore(collection_name="documents")
+    code_store = MilvusStore(collection_name="code_base")
+    
+    # Configure vector stores with tool information
+    vector_stores = [
+        {
+            'store': docs_store,
+            'name': 'search_documents',
+            'description': 'Search and retrieve information from document collection.'
+        },
+        {
+            'store': code_store,
+            'name': 'search_code',
+            'description': 'Search and retrieve information from code repository.',
+            'k': 3,  # Custom retrieval count
+            'ranker_weights': [0.7, 0.3]  # Custom ranker weights
+        }
+    ]
+    
+    # Create the agentic RAG system with multiple stores
+    rag_agent = AgenticRAG(vector_stores=vector_stores)
+    
+    # The agent will automatically choose the appropriate tool
+    response = rag_agent.run("Show me the main function in the code")
+    print(response)
+    
+    # Add more vector stores dynamically
+    wiki_store = MilvusStore(collection_name="wikipedia")
+    rag_agent.add_vector_store(
+        store=wiki_store,
+        name='search_wiki',
+        description='Search Wikipedia articles for general knowledge.'
+    )
+    ```
 """
 
 import logging
+import os
 import time
 import uuid
 from typing import Dict, List, Literal, Any, Optional, Union
 
 # Import configuration
-from src.config import Config
+from src.config import config
 
 # Import LangGraph components
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode
-from langgraph.prebuilt import tools_condition
+# Removed tools_condition import as we use custom routing
 from langgraph.checkpoint.memory import InMemorySaver
 
 # Import LangChain components
@@ -127,18 +170,19 @@ class AgenticRAG:
     
     This class implements an agentic RAG system that uses a graph-based approach to:
     1. Generate a query or respond directly
-    2. Retrieve relevant documents
+    2. Retrieve relevant documents from multiple vector stores
     3. Grade document relevance
     4. Rewrite the question if needed
     5. Generate a final answer
     
-    The system uses a Milvus vector store for document retrieval and LangGraph for
-    orchestrating the RAG workflow.
+    The system supports multiple vector stores, each converted to a retriever tool that
+    the agent can access. Uses LangGraph for orchestrating the RAG workflow.
     """
     
     def __init__(
             self,
-            vector_store: Optional[MilvusStore] = None,
+            vector_stores: Optional[List[Dict[str, Any]]] = None,
+            vector_store: Optional[MilvusStore] = None,  # Backward compatibility
             model_name: str = None,
             api_key: str = None,
             temperature: float = 0,
@@ -149,15 +193,21 @@ class AgenticRAG:
         Initialize the AgenticRAG system.
         
         Args:
-            vector_store: MilvusStore instance (if None, a new one will be created)
-            model_name: Name of the model to use (defaults to Config.MODEL)
-            api_key: OpenAI API key (defaults to Config.OPENAI_API_KEY)
+            vector_stores: List of vector store configurations. Each dict should contain:
+                          - 'store': MilvusStore instance
+                          - 'name': Tool name (string)
+                          - 'description': Tool description (string)
+                          - 'k': Optional retrieval count (defaults to config)
+                          - 'ranker_weights': Optional ranker weights (defaults to config)
+            vector_store: Single MilvusStore instance for backward compatibility
+            model_name: Name of the model to use (defaults to config.get("model", "text_generation"))
+            api_key: OpenAI API key (defaults to os.environ.get("OPENAI_API_KEY"))
             temperature: Temperature for the model (default: 0)
             thread_id: Optional thread ID for the conversation (default: None)
             checkpointer: Optional checkpointer for saving the conversation state (default: None)
         """
-        self.model_name = model_name or Config.MODEL
-        self.api_key = api_key or Config.OPENAI_API_KEY
+        self.model_name = model_name or config.get("model", "text_generation", default="gpt-4.1-mini")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
         self.temperature = temperature
         self.checkpointer = checkpointer or InMemorySaver()
         
@@ -167,21 +217,98 @@ class AgenticRAG:
         else:
             self.thread_id = thread_id
         
-        # Initialize the vector store if not provided
-        self.vector_store = vector_store or MilvusStore()
+        # Initialize vector stores and create retriever tools
+        self.vector_stores = []
+        self.retriever_tools = []
         
-        # Create the retriever
-        self.retriever = self.vector_store.as_retriever(
-            k=Config.RETRIEVAL_K,
-            ranker_weights=Config.RETRIEVAL_WEIGHTS
-        )
+        if vector_stores:
+            # Use the new multiple vector stores approach
+            for vs_config in vector_stores:
+                if not isinstance(vs_config, dict):
+                    raise ValueError("Each vector store configuration must be a dictionary")
+                
+                required_keys = ['store', 'name', 'description']
+                missing_keys = [key for key in required_keys if key not in vs_config]
+                if missing_keys:
+                    raise ValueError(f"Vector store configuration missing required keys: {missing_keys}")
+                
+                store = vs_config['store']
+                name = vs_config['name']
+                description = vs_config['description']
+                k = vs_config.get('k', config.get("retrieval", "k", default=2))
+                ranker_weights = vs_config.get('ranker_weights', config.get("retrieval", "weights", default=[0.6, 0.4]))
+                
+                # Create retriever
+                retriever = store.as_retriever(k=k, ranker_weights=ranker_weights)
+                
+                # Create retriever tool
+                retriever_tool = create_retriever_tool(retriever, name, description)
+                
+                # Store the configuration
+                self.vector_stores.append({
+                    'store': store,
+                    'name': name,
+                    'description': description,
+                    'retriever': retriever,
+                    'tool': retriever_tool,
+                    'k': k,
+                    'ranker_weights': ranker_weights
+                })
+                self.retriever_tools.append(retriever_tool)
+                
+        elif vector_store:
+            # Backward compatibility: single vector store
+            retriever = vector_store.as_retriever(
+                k=config.get("retrieval", "k", default=2),
+                ranker_weights=config.get("retrieval", "weights", default=[0.6, 0.4])
+            )
+            
+            retriever_tool = create_retriever_tool(
+                retriever,
+                "retrieve_documents",
+                "Search and retrieve information from the document collection."
+            )
+            
+            self.vector_stores.append({
+                'store': vector_store,
+                'name': 'retrieve_documents',
+                'description': 'Search and retrieve information from the document collection.',
+                'retriever': retriever,
+                'tool': retriever_tool,
+                'k': config.get("retrieval", "k", default=2),
+                'ranker_weights': config.get("retrieval", "weights", default=[0.6, 0.4])
+            })
+            self.retriever_tools.append(retriever_tool)
+            
+        else:
+            # Default: create a single MilvusStore
+            default_store = MilvusStore()
+            retriever = default_store.as_retriever(
+                k=config.get("retrieval", "k", default=2),
+                ranker_weights=config.get("retrieval", "weights", default=[0.6, 0.4])
+            )
+            
+            retriever_tool = create_retriever_tool(
+                retriever,
+                "retrieve_documents",
+                "Search and retrieve information from the document collection."
+            )
+            
+            self.vector_stores.append({
+                'store': default_store,
+                'name': 'retrieve_documents',
+                'description': 'Search and retrieve information from the document collection.',
+                'retriever': retriever,
+                'tool': retriever_tool,
+                'k': config.get("retrieval", "k", default=2),
+                'ranker_weights': config.get("retrieval", "weights", default=[0.6, 0.4])
+            })
+            self.retriever_tools.append(retriever_tool)
         
-        # Create the retriever tool
-        self.retriever_tool = create_retriever_tool(
-            self.retriever,
-            "retrieve_documents",
-            "Search and retrieve information from the document collection."
-        )
+        # Maintain backward compatibility attributes
+        self.vector_store = self.vector_stores[0]['store'] if self.vector_stores else None
+        self.retriever = self.vector_stores[0]['retriever'] if self.vector_stores else None
+        self.retriever_tool = self.retriever_tools[0] if self.retriever_tools else None
         
         # Initialize the LLM
         self.response_model = init_chat_model(self.model_name, temperature=self.temperature)
@@ -190,7 +317,126 @@ class AgenticRAG:
         # Create the graph
         self.graph = self._build_graph()
         
-        logger.info(f"AgenticRAG initialized with model: {self.model_name}")
+        logger.info(f"AgenticRAG initialized with model: {self.model_name} and {len(self.vector_stores)} vector store(s)")
+    
+    def add_vector_store(self, store: MilvusStore, name: str, description: str, 
+                        k: Optional[int] = None, ranker_weights: Optional[List[float]] = None) -> None:
+        """
+        Add a new vector store to the agent.
+        
+        Args:
+            store: MilvusStore instance
+            name: Tool name for the retriever
+            description: Tool description for the retriever
+            k: Optional retrieval count (defaults to config)
+            ranker_weights: Optional ranker weights (defaults to config)
+        """
+        k = k or config.get("retrieval", "k", default=2)
+        ranker_weights = ranker_weights or config.get("retrieval", "weights", default=[0.6, 0.4])
+        
+        # Create retriever
+        retriever = store.as_retriever(k=k, ranker_weights=ranker_weights)
+        
+        # Create retriever tool
+        retriever_tool = create_retriever_tool(retriever, name, description)
+        
+        # Store the configuration
+        vs_config = {
+            'store': store,
+            'name': name,
+            'description': description,
+            'retriever': retriever,
+            'tool': retriever_tool,
+            'k': k,
+            'ranker_weights': ranker_weights
+        }
+        
+        self.vector_stores.append(vs_config)
+        self.retriever_tools.append(retriever_tool)
+        
+        # Rebuild the graph to include the new tool
+        self.graph = self._build_graph()
+        
+        logger.info(f"Added vector store '{name}' to AgenticRAG")
+    
+    def remove_vector_store(self, name: str) -> bool:
+        """
+        Remove a vector store by name.
+        
+        Args:
+            name: Name of the vector store to remove
+            
+        Returns:
+            bool: True if removed successfully, False if not found
+        """
+        for i, vs_config in enumerate(self.vector_stores):
+            if vs_config['name'] == name:
+                # Remove from both lists
+                removed_config = self.vector_stores.pop(i)
+                self.retriever_tools.pop(i)
+                
+                # Update backward compatibility attributes if needed
+                if self.vector_store == removed_config['store']:
+                    self.vector_store = self.vector_stores[0]['store'] if self.vector_stores else None
+                    self.retriever = self.vector_stores[0]['retriever'] if self.vector_stores else None
+                    self.retriever_tool = self.retriever_tools[0] if self.retriever_tools else None
+                
+                # Rebuild the graph
+                self.graph = self._build_graph()
+                
+                logger.info(f"Removed vector store '{name}' from AgenticRAG")
+                return True
+        
+        logger.warning(f"Vector store '{name}' not found")
+        return False
+    
+    def get_vector_store_info(self) -> List[Dict[str, Any]]:
+        """
+        Get information about all configured vector stores.
+        
+        Returns:
+            List[Dict]: List of vector store information (excluding the actual store and tool objects)
+        """
+        return [{
+            'name': vs['name'],
+            'description': vs['description'],
+            'k': vs['k'],
+            'ranker_weights': vs['ranker_weights']
+        } for vs in self.vector_stores]
+    
+    def _route_tools(self, state: MessagesState) -> str:
+        """
+        Custom routing function to route to the appropriate tool node or END.
+        
+        Use in the conditional_edge to route to the specific ToolNode if the last message
+        has tool calls. Otherwise, route to the end.
+        
+        Args:
+            state: Current state containing messages
+            
+        Returns:
+            str: Node name to route to (tool name or END)
+        """
+        if isinstance(state, list):
+            ai_message = state[-1]
+        elif messages := state.get("messages", []):
+            ai_message = messages[-1]
+        else:
+            raise ValueError(f"No messages found in input state to tool_edge: {state}")
+            
+        if hasattr(ai_message, "tool_calls") and len(ai_message.tool_calls) > 0:
+            # Get the tool name from the first tool call
+            tool_name = ai_message.tool_calls[0]["name"]
+            
+            # Verify that the tool name corresponds to one of our vector store tools
+            valid_tool_names = [vs['name'] for vs in self.vector_stores]
+            if tool_name in valid_tool_names:
+                return tool_name
+            else:
+                logger.warning(f"Unknown tool name: {tool_name}. Available tools: {valid_tool_names}")
+                return END
+        
+        return END
     
     def _build_graph(self) -> StateGraph:
         """
@@ -204,28 +450,39 @@ class AgenticRAG:
         
         # Add nodes
         workflow.add_node("generate_query_or_respond", self._generate_query_or_respond)
-        workflow.add_node("retrieve", ToolNode([self.retriever_tool]))
+        
+        # Add each retriever tool as an individual node
+        retriever_node_names = []
+        for vs_config in self.vector_stores:
+            node_name = vs_config['name']
+            retriever_node_names.append(node_name)
+            workflow.add_node(node_name, ToolNode([vs_config['tool']]))
+        
         workflow.add_node("rewrite_question", self._rewrite_question)
         workflow.add_node("generate_answer", self._generate_answer)
         
         # Add edges
         workflow.add_edge(START, "generate_query_or_respond")
         
-        # Decide whether to retrieve
+        # Decide whether to retrieve - map each tool name to its corresponding node
+        tools_mapping = {}
+        for vs_config in self.vector_stores:
+            tool_name = vs_config['name']
+            tools_mapping[tool_name] = tool_name
+        tools_mapping[END] = END
+        
         workflow.add_conditional_edges(
             "generate_query_or_respond",
-            tools_condition,
-            {
-                "tools": "retrieve",
-                END: END,
-            },
+            self._route_tools,
+            tools_mapping,
         )
         
-        # Grade documents after retrieval
-        workflow.add_conditional_edges(
-            "retrieve",
-            self._grade_documents,
-        )
+        # Grade documents after retrieval from each retriever node
+        for node_name in retriever_node_names:
+            workflow.add_conditional_edges(
+                node_name,
+                self._grade_documents,
+            )
         
         workflow.add_edge("generate_answer", END)
         workflow.add_edge("rewrite_question", "generate_query_or_respond")
@@ -253,7 +510,7 @@ class AgenticRAG:
         logger.debug("Generating query or response")
         response = (
             self.response_model
-            .bind_tools([self.retriever_tool])
+            .bind_tools(self.retriever_tools)
             .invoke(state["messages"])
         )
         return {"messages": [response]}
