@@ -25,7 +25,7 @@ import logging
 from typing import List, Dict, Any, Optional, Union
 
 # Import configuration
-from src.config import Config
+from src.config import config
 
 # Import vector store libraries
 from langchain_openai import OpenAIEmbeddings
@@ -250,20 +250,20 @@ class MilvusStore:
         Initialize the MilvusStore.
         
         Args:
-            uri: URI for Milvus connection (defaults to Config.URI)
-            db_name: Name of the database (defaults to Config.DB_NAME)
-            collection_name: Name of the collection (defaults to Config.DB_COLLECTION_NAME)
-            embed_model: Embedding model to use (defaults to Config.EMBED_MODEL)
-            api_key: OpenAI API key (defaults to Config.OPENAI_API_KEY)
+            uri: URI for Milvus connection (defaults to config.get("database", "uri"))
+            db_name: Name of the database (defaults to config.get("database", "name"))
+            collection_name: Name of the collection (defaults to config.get("database", "collection_name"))
+            embed_model: Embedding model to use (defaults to config.get("model", "embeddings"))
+            api_key: OpenAI API key (defaults to os.environ.get("OPENAI_API_KEY"))
             drop_old: Whether to drop the existing collection if it exists
-            namespace: Default namespace to use for documents (defaults to Config.NAMESPACE)
+            namespace: Default namespace to use for documents (defaults to config.get("database", "namespace"))
         """
-        self.uri = uri or Config.URI
-        self.db_name = db_name or Config.DB_NAME
-        self.collection_name = collection_name or Config.DB_COLLECTION_NAME
-        self.embed_model = embed_model or Config.EMBED_MODEL
-        self.api_key = api_key or Config.OPENAI_API_KEY
-        self.namespace = namespace or Config.NAMESPACE
+        self.uri = uri or config.get("database", "uri", default="http://localhost:19530")
+        self.db_name = db_name or config.get("database", "name", default="rag_multimodal")
+        self.collection_name = collection_name or config.get("database", "collection_name", default="collection_demo")
+        self.embed_model = embed_model or config.get("model", "embeddings", default="text-embedding-3-small")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        self.namespace = namespace or config.get("database", "namespace", default="CaseDoneDemo")
         
         # Connect to Milvus
         self._connect_to_milvus()

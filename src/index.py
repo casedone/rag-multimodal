@@ -21,6 +21,14 @@ Usage:
         drop_existing=True,
         namespace="custom_namespace"
     )
+    
+    # Process and index with custom config file
+    from src.config import ConfigLoader
+    custom_config = ConfigLoader("path/to/custom/config.yaml")
+    process_and_index_directory(
+        directory_path="path/to/documents",
+        config=custom_config
+    )
     ```
     
 Logging Features:
@@ -37,7 +45,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
 # Import configuration
-from src.config import Config, ConfigLoader
+from src.config import config, ConfigLoader
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -145,7 +153,7 @@ def get_document_converter(pdf_pipeline_options: Optional[PdfPipelineOptions] = 
     Returns:
         DocumentConverter: Configured document converter
     """
-    pdf_pipeline_options = pdf_pipeline_options or Config.get_pdf_pipeline_options()
+    pdf_pipeline_options = pdf_pipeline_options or config.get_pdf_pipeline_options()
     
     return DocumentConverter(
         format_options={
@@ -168,7 +176,7 @@ def get_chunker(
     
     Args:
         tokenizer_model_id: Model ID for tokenizer (defaults to tokenizer from config)
-        max_tokens: Maximum tokens per chunk (defaults to Config.MAX_TOKENS)
+        max_tokens: Maximum tokens per chunk (defaults to config.get("document", "max_tokens"))
         image_mode: Image reference mode (defaults to ImageRefMode.PLACEHOLDER)
         image_placeholder: Placeholder text for images (defaults to "")
         mark_annotations: Whether to mark annotations (defaults to True)
@@ -179,14 +187,9 @@ def get_chunker(
         HybridChunker: Configured document chunker
     """
     # Use provided values or fall back to config defaults
-    if config:
-        # Use custom config
-        default_tokenizer_model_id = config.get('model', 'tokenizer', default='sentence-transformers/all-MiniLM-L6-v2')
-        default_max_tokens = config.get('document', 'max_tokens', default=512)
-    else:
-        # Use global Config - EMBED_MODEL_ID actually maps to tokenizer config
-        default_tokenizer_model_id = Config.EMBED_MODEL_ID
-        default_max_tokens = Config.MAX_TOKENS
+    config_to_use = config if config else globals()['config']
+    default_tokenizer_model_id = config_to_use.get('model', 'tokenizer', default='sentence-transformers/all-MiniLM-L6-v2')
+    default_max_tokens = config_to_use.get('document', 'max_tokens', default=512)
     
     model_id = tokenizer_model_id or default_tokenizer_model_id
     tokens = max_tokens or default_max_tokens
@@ -267,7 +270,8 @@ def process_and_index_directory(
     directory_path: Union[str, Path],
     drop_existing: bool = False,
     namespace: str = None,
-    file_extensions: List[str] = None
+    file_extensions: List[str] = None,
+    config: Optional['ConfigLoader'] = None
 ) -> None:
     """
     Process all files in a directory and index them to a vector store.
@@ -275,12 +279,16 @@ def process_and_index_directory(
     Args:
         directory_path: Path to the directory containing files to process
         drop_existing: Whether to drop the existing collection if it exists
-        namespace: Namespace to use for the documents (defaults to Config.NAMESPACE)
-        file_extensions: List of file extensions to process (defaults to Config.SUPPORTED_FILE_TYPES)
+        namespace: Namespace to use for the documents (defaults to config.get("database", "namespace"))
+        file_extensions: List of file extensions to process (defaults to config.get("document", "supported_file_types"))
+        config: Optional ConfigLoader instance to use instead of global Config
     """
     directory_path = Path(directory_path) if isinstance(directory_path, str) else directory_path
-    namespace = namespace or Config.NAMESPACE
-    file_extensions = file_extensions or Config.SUPPORTED_FILE_TYPES
+    
+    # Use provided config or fall back to global config
+    config_to_use = config if config else globals()['config']
+    namespace = namespace or config_to_use.get("database", "namespace", default="CaseDoneDemo")
+    file_extensions = file_extensions or config_to_use.get("document", "supported_file_types", default=[".pdf"])
     
     if not directory_path.exists():
         raise FileNotFoundError(f"Directory {directory_path} does not exist")
@@ -297,11 +305,25 @@ def process_and_index_directory(
     logger.info(f"Found {len(files)} files to process")
     
     # Create document converter and chunker
-    converter = get_document_converter()
-    chunker = get_chunker()
+    pdf_pipeline_options = config.get_pdf_pipeline_options()
+    converter = get_document_converter(pdf_pipeline_options=pdf_pipeline_options)
+    chunker = get_chunker(config=config)
     
-    # Create vector store
-    milvus_store = MilvusStore(drop_old=drop_existing, namespace=namespace)
+    # Extract config values for MilvusStore
+    uri = config_to_use.get("database", "uri", default="http://localhost:19530")
+    db_name = config_to_use.get("database", "name", default="rag_multimodal")
+    collection_name = config_to_use.get("database", "collection_name", default="collection_demo")
+    embed_model = config_to_use.get("model", "embeddings", default="text-embedding-3-small")
+    
+    # Create vector store with explicit parameters
+    milvus_store = MilvusStore(
+        uri=uri,
+        db_name=db_name,
+        collection_name=collection_name,
+        embed_model=embed_model,
+        drop_old=drop_existing,
+        namespace=namespace
+    )
     
     # Process and index each file
     all_docs = []
