@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional, Union
 
 # Import configuration
-from src.config import Config
+from src.config import Config, ConfigLoader
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -56,6 +56,10 @@ from docling_core.types.doc import ImageRefMode
 from docling.datamodel.base_models import InputFormat
 from docling.document_converter import DocumentConverter, PdfFormatOption
 from docling.chunking import HybridChunker
+from docling.datamodel.pipeline_options import (
+            PdfPipelineOptions,
+            PictureDescriptionApiOptions
+        )
 from langchain_docling import DoclingLoader
 from langchain_docling.loader import ExportType
 from langchain_core.documents import Document
@@ -134,32 +138,66 @@ def setup_logging(level=logging.INFO, log_file=None):
 setup_logging(log_file=DEFAULT_LOG_FILE)
 
 
-def get_document_converter() -> DocumentConverter:
+def get_document_converter(pdf_pipeline_options: Optional[PdfPipelineOptions] = None) -> DocumentConverter:
     """
     Create and configure a document converter.
     
     Returns:
         DocumentConverter: Configured document converter
     """
-    pipeline_options = Config.get_pdf_pipeline_options()
+    pdf_pipeline_options = pdf_pipeline_options or Config.get_pdf_pipeline_options()
     
     return DocumentConverter(
         format_options={
-            InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_pipeline_options)
         }
     )
 
 
-def get_chunker() -> HybridChunker:
+def get_chunker(
+    embed_model_id: Optional[str] = None,
+    max_tokens: Optional[int] = None,
+    image_mode: Optional[ImageRefMode] = None,
+    image_placeholder: Optional[str] = None,
+    mark_annotations: Optional[bool] = None,
+    include_annotations: Optional[bool] = None,
+    config: Optional['ConfigLoader'] = None
+) -> HybridChunker:
     """
-    Create and configure a document chunker.
+    Create and configure a document chunker with optional configuration overrides.
+    
+    Args:
+        embed_model_id: Model ID for tokenizer (defaults to Config.EMBED_MODEL_ID)
+        max_tokens: Maximum tokens per chunk (defaults to Config.MAX_TOKENS)
+        image_mode: Image reference mode (defaults to ImageRefMode.PLACEHOLDER)
+        image_placeholder: Placeholder text for images (defaults to "")
+        mark_annotations: Whether to mark annotations (defaults to True)
+        include_annotations: Whether to include annotations (defaults to True)
+        config: Optional ConfigLoader instance to use instead of global Config
     
     Returns:
         HybridChunker: Configured document chunker
     """
+    # Use provided values or fall back to config defaults
+    if config:
+        # Use custom config
+        default_model_id = config.get('model', 'tokenizer', default='sentence-transformers/all-MiniLM-L6-v2')
+        default_max_tokens = config.get('document', 'max_tokens', default=512)
+    else:
+        # Use global Config
+        default_model_id = Config.EMBED_MODEL_ID
+        default_max_tokens = Config.MAX_TOKENS
+    
+    model_id = embed_model_id or default_model_id
+    tokens = max_tokens or default_max_tokens
+    img_mode = image_mode if image_mode is not None else ImageRefMode.PLACEHOLDER
+    img_placeholder = image_placeholder if image_placeholder is not None else ""
+    mark_annot = mark_annotations if mark_annotations is not None else True
+    include_annot = include_annotations if include_annotations is not None else True
+    
     tokenizer = HuggingFaceTokenizer(
-        tokenizer=AutoTokenizer.from_pretrained(Config.EMBED_MODEL_ID),
-        max_tokens=Config.MAX_TOKENS,
+        tokenizer=AutoTokenizer.from_pretrained(model_id),
+        max_tokens=tokens,
     )
     
     class CustomMDSerializerProvider(ChunkingSerializerProvider):
@@ -168,10 +206,10 @@ def get_chunker() -> HybridChunker:
                 doc=doc,
                 table_serializer=MarkdownTableSerializer(),
                 params=MarkdownParams(
-                    image_mode=ImageRefMode.PLACEHOLDER,
-                    image_placeholder="",
-                    mark_annotations=True,
-                    include_annotations=True
+                    image_mode=img_mode,
+                    image_placeholder=img_placeholder,
+                    mark_annotations=mark_annot,
+                    include_annotations=include_annot
                 )
             )
     
