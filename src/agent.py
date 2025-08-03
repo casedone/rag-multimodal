@@ -37,7 +37,7 @@ from langgraph.prebuilt import tools_condition
 from langgraph.checkpoint.memory import InMemorySaver
 
 # Import LangChain components
-from langchain_core.messages import convert_to_messages
+from langchain_core.messages import convert_to_messages, HumanMessage
 from langchain.chat_models import init_chat_model
 from langchain.tools.retriever import create_retriever_tool
 from langchain_openai import OpenAIEmbeddings
@@ -231,7 +231,11 @@ class AgenticRAG:
         workflow.add_edge("rewrite_question", "generate_query_or_respond")
         
         # Compile the graph
-        return workflow.compile(checkpointer=self.checkpointer)
+        graph = workflow.compile(checkpointer=self.checkpointer)
+
+        output_file = "graph.png"
+        graph.get_graph().draw_mermaid_png(output_file_path=output_file)
+        return graph
     
     def _generate_query_or_respond(self, state: MessagesState) -> Dict:
         """
@@ -305,8 +309,14 @@ class AgenticRAG:
             Dict: Updated state with rewritten question
         """
         logger.debug("Rewriting question")
-        messages = state["messages"]
-        question = messages[0].content
+
+        last_human_message = None
+        for message in reversed(state["messages"]):
+            if isinstance(message, HumanMessage):
+                last_human_message = message
+                break
+
+        question = last_human_message.content
         
         rewrite_prompt = (
             "Look at the input and try to reason about the underlying semantic intent / meaning.\n"
@@ -353,33 +363,6 @@ class AgenticRAG:
         
         return {"messages": [response]}
     
-    def run(self, query: str) -> str:
-        """
-        Run the agentic RAG system with a query.
-        
-        Args:
-            query: User query
-            
-        Returns:
-            str: Generated response
-        """
-        logger.info(f"Running agentic RAG with query: {query}")
-        
-        # Create initial state
-        initial_state = {"messages": [{"role": "user", "content": query}]}
-        
-        # Run the graph
-        config = {"configurable": {"thread_id": self.thread_id}}
-        result = self.graph.invoke(initial_state, config)
-        
-        # Extract the final response
-        final_message = result["messages"][-1]
-        response = final_message.content
-        
-        logger.info("Agentic RAG execution completed")
-        
-        return response
-    
     def update_thread_id(self, new_thread_id: Optional[str] = None) -> str:
         """
         Update the thread_id for the conversation.
@@ -397,3 +380,39 @@ class AgenticRAG:
             
         logger.info(f"Thread ID updated to: {self.thread_id}")
         return self.thread_id
+    
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Get the configuration dictionary for the agent.
+        
+        Returns:
+            Dict[str, Any]: Configuration dictionary with thread_id
+        """
+        return {"configurable": {"thread_id": self.thread_id}}
+
+    def run(self, query: str) -> str:
+        """
+        Run the agentic RAG system with a query.
+        
+        Args:
+            query: User query
+            
+        Returns:
+            str: Generated response
+        """
+        logger.info(f"Running agentic RAG with query: {query}")
+        
+        # Create initial state
+        message = {"messages": [{"role": "user", "content": query}]}
+        
+        # Run the graph
+        config = self.get_config()
+        result = self.graph.invoke(message, config)
+        
+        # Extract the final response
+        final_message = result["messages"][-1]
+        response = final_message.content
+        
+        logger.info("Agentic RAG execution completed")
+        
+        return response
