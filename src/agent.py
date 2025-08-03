@@ -23,6 +23,8 @@ Usage:
 """
 
 import logging
+import time
+import uuid
 from typing import Dict, List, Literal, Any, Optional, Union
 
 # Import configuration
@@ -32,6 +34,7 @@ from src.config import Config
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
+from langgraph.checkpoint.memory import InMemorySaver
 
 # Import LangChain components
 from langchain_core.messages import convert_to_messages
@@ -126,7 +129,9 @@ class AgenticRAG:
             vector_store: Optional[MilvusStore] = None,
             model_name: str = None,
             api_key: str = None,
-            temperature: float = 0
+            temperature: float = 0,
+            thread_id: Optional[str] = None,
+            checkpointer: Optional[InMemorySaver] = None,
         ):
         """
         Initialize the AgenticRAG system.
@@ -136,10 +141,22 @@ class AgenticRAG:
             model_name: Name of the model to use (defaults to Config.MODEL)
             api_key: OpenAI API key (defaults to Config.OPENAI_API_KEY)
             temperature: Temperature for the model (default: 0)
+            thread_id: Optional thread ID for the conversation (default: None)
+            checkpointer: Optional checkpointer for saving the conversation state (default: None)
         """
         self.model_name = model_name or Config.MODEL
         self.api_key = api_key or Config.OPENAI_API_KEY
         self.temperature = temperature
+        self.checkpointer = checkpointer or InMemorySaver()
+        
+        # Generate unique thread_id if not provided
+        if thread_id is None:
+            # Create unique thread_id using timestamp and UUID
+            timestamp = str(int(time.time() * 1000))  # milliseconds
+            random_uuid = str(uuid.uuid4()).replace('-', '')[:8]  # 8 chars from UUID
+            self.thread_id = f"{timestamp}_{random_uuid}"
+        else:
+            self.thread_id = thread_id
         
         # Initialize the vector store if not provided
         self.vector_store = vector_store or MilvusStore()
@@ -205,7 +222,7 @@ class AgenticRAG:
         workflow.add_edge("rewrite_question", "generate_query_or_respond")
         
         # Compile the graph
-        return workflow.compile()
+        return workflow.compile(checkpointer=self.checkpointer)
     
     def _generate_query_or_respond(self, state: MessagesState) -> Dict:
         """
@@ -343,7 +360,8 @@ class AgenticRAG:
         initial_state = {"messages": [{"role": "user", "content": query}]}
         
         # Run the graph
-        result = self.graph.invoke(initial_state)
+        config = {"configurable": {"thread_id": self.thread_id}}
+        result = self.graph.invoke(initial_state, config)
         
         # Extract the final response
         final_message = result["messages"][-1]
