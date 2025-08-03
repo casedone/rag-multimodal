@@ -102,6 +102,18 @@ def configure_logging(level=logging.INFO, log_file=None):
 configure_logging(log_file=DEFAULT_LOG_FILE)
 
 
+def generate_thread_id() -> str:
+    """
+    Generate a unique thread ID using timestamp and UUID.
+    
+    Returns:
+        str: Unique thread ID in format "{timestamp}_{random_uuid}"
+    """
+    timestamp = str(int(time.time() * 1000))  # milliseconds
+    random_uuid = str(uuid.uuid4()).replace('-', '')  # 8 chars from UUID
+    return f"{timestamp}_{random_uuid}"
+
+
 class GradeDocuments(BaseModel):
     """Grade documents using a binary score for relevance check."""
     binary_score: str = Field(
@@ -151,10 +163,7 @@ class AgenticRAG:
         
         # Generate unique thread_id if not provided
         if thread_id is None:
-            # Create unique thread_id using timestamp and UUID
-            timestamp = str(int(time.time() * 1000))  # milliseconds
-            random_uuid = str(uuid.uuid4()).replace('-', '')[:8]  # 8 chars from UUID
-            self.thread_id = f"{timestamp}_{random_uuid}"
+            self.thread_id = generate_thread_id()
         else:
             self.thread_id = thread_id
         
@@ -370,3 +379,21 @@ class AgenticRAG:
         logger.info("Agentic RAG execution completed")
         
         return response
+    
+    def update_thread_id(self, new_thread_id: Optional[str] = None) -> str:
+        """
+        Update the thread_id for the conversation.
+        
+        Args:
+            new_thread_id: New thread ID to use. If None, generates a new unique thread_id.
+            
+        Returns:
+            str: The updated thread_id
+        """
+        if new_thread_id is None:
+            self.thread_id = generate_thread_id()
+        else:
+            self.thread_id = new_thread_id
+            
+        logger.info(f"Thread ID updated to: {self.thread_id}")
+        return self.thread_id
