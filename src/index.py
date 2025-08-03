@@ -155,7 +155,7 @@ def get_document_converter(pdf_pipeline_options: Optional[PdfPipelineOptions] = 
 
 
 def get_chunker(
-    embed_model_id: Optional[str] = None,
+    tokenizer_model_id: Optional[str] = None,
     max_tokens: Optional[int] = None,
     image_mode: Optional[ImageRefMode] = None,
     image_placeholder: Optional[str] = None,
@@ -167,7 +167,7 @@ def get_chunker(
     Create and configure a document chunker with optional configuration overrides.
     
     Args:
-        embed_model_id: Model ID for tokenizer (defaults to Config.EMBED_MODEL_ID)
+        tokenizer_model_id: Model ID for tokenizer (defaults to tokenizer from config)
         max_tokens: Maximum tokens per chunk (defaults to Config.MAX_TOKENS)
         image_mode: Image reference mode (defaults to ImageRefMode.PLACEHOLDER)
         image_placeholder: Placeholder text for images (defaults to "")
@@ -181,14 +181,14 @@ def get_chunker(
     # Use provided values or fall back to config defaults
     if config:
         # Use custom config
-        default_model_id = config.get('model', 'tokenizer', default='sentence-transformers/all-MiniLM-L6-v2')
+        default_tokenizer_model_id = config.get('model', 'tokenizer', default='sentence-transformers/all-MiniLM-L6-v2')
         default_max_tokens = config.get('document', 'max_tokens', default=512)
     else:
-        # Use global Config
-        default_model_id = Config.EMBED_MODEL_ID
+        # Use global Config - EMBED_MODEL_ID actually maps to tokenizer config
+        default_tokenizer_model_id = Config.EMBED_MODEL_ID
         default_max_tokens = Config.MAX_TOKENS
     
-    model_id = embed_model_id or default_model_id
+    model_id = tokenizer_model_id or default_tokenizer_model_id
     tokens = max_tokens or default_max_tokens
     img_mode = image_mode if image_mode is not None else ImageRefMode.PLACEHOLDER
     img_placeholder = image_placeholder if image_placeholder is not None else ""
