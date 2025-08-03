@@ -3,58 +3,47 @@ Configuration file for RAG Multimodal application.
 Contains all the configuration parameters used across the application.
 
 Usage:
-    1. Direct import of configuration values:
-       ```python
-       from src.config import MODEL, EMBED_MODEL, MAX_TOKENS
-       
-       # Use the configuration values directly
-       print(f"Using model: {MODEL}")
-       ```
-       
-    2. Using the Config class for grouped access:
-       ```python
-       from src.config import Config
-       
-       # Access configuration values as class attributes
-       model = Config.MODEL
-       embed_model = Config.EMBED_MODEL
-       
-       # Get specialized configuration objects
-       milvus_args = Config.get_milvus_connection_args()
-       pdf_options = Config.get_pdf_pipeline_options()
-       
-       # Reload configuration from a custom file
-       Config("path/to/custom/config.yaml")
-       
-       # Access updated configuration values
-       updated_model = Config.MODEL
-       ```
-       
-    3. Using the ConfigLoader for direct YAML access:
-       ```python
-       from src.config import ConfigLoader
-       
-       # Get the singleton instance
-       config_loader = ConfigLoader()
-       
-       # Access configuration values by path
-       value = config_loader.get("database", "uri")
-       custom_value = config_loader.get("custom", "section", "key", default="default_value")
-       ```
+    ```python
+    from src.config import config
+    
+    # Access configuration values by path
+    model = config.get("model", "text_generation", default="gpt-4.1-mini")
+    embed_model = config.get("model", "embeddings", default="text-embedding-3-small")
+    
+    # Get specialized configuration objects
+    milvus_args = config.get_milvus_connection_args()
+    pdf_options = config.get_pdf_pipeline_options()
+    
+    # Use custom configuration file
+    from src.config import ConfigLoader
+    custom_config = ConfigLoader("path/to/custom/config.yaml")
+    custom_model = custom_config.get("model", "text_generation")
+    
+    # Strict mode - prevent accidental new key creation
+    strict_config = ConfigLoader(allow_new_keys=False)
+    strict_config.set("model", "text_generation", "gpt-4")  # OK - existing key
+    # strict_config.set("new", "key", "value")  # Would raise KeyError
+    strict_config.set("new", "key", "value", force=True)  # OK - forced
+    ```
 """
 import os
 import yaml
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, Any, Optional, Union
 from dotenv import load_dotenv
-from functools import lru_cache
 
 class ConfigLoader:
     """Configuration loader for RAG Multimodal application"""
     
-    def __init__(self, config_path: Optional[Union[str, Path]] = None):
-        """Initialize ConfigLoader with optional custom config path"""
+    def __init__(self, config_path: Optional[Union[str, Path]] = None, allow_new_keys: bool = True):
+        """Initialize ConfigLoader with optional custom config path
+        
+        Args:
+            config_path: Optional path to configuration file
+            allow_new_keys: Whether to allow setting keys that don't exist in the original config
+        """
         self._config = None
+        self._allow_new_keys = allow_new_keys
         self._load_config(config_path)
     
     def _load_config(self, config_path: Optional[Union[str, Path]] = None):
@@ -90,161 +79,131 @@ class ConfigLoader:
                 return default
         return value
     
+    def set(self, *keys_and_value, force: bool = False) -> None:
+        """Set a configuration value by key path
+        
+        Args:
+            *keys_and_value: Key path followed by the value to set
+                           Last argument is the value, preceding arguments are the key path
+            force: If True, allows setting new keys even when allow_new_keys is False
+            
+        Example:
+            config.set("model", "text_generation", "gpt-4")
+            config.set("database", "uri", "http://localhost:19530")
+            config.set("new", "key", "value", force=True)  # Force creation of new key
+            
+        Raises:
+            KeyError: If trying to set a non-existing key when allow_new_keys is False
+        """
+        if len(keys_and_value) < 2:
+            raise ValueError("At least one key and a value must be provided")
+            
+        # Split keys and value
+        keys = keys_and_value[:-1]
+        value = keys_and_value[-1]
+            
+        # Initialize config if None
+        if self._config is None:
+            self._config = {}
+            
+        # Check if we're allowed to create new keys
+        if not self._allow_new_keys and not force:
+            self._validate_key_exists(keys)
+            
+        # Navigate to the parent of the target key
+        current = self._config
+        for key in keys[:-1]:
+            if key not in current:
+                if not self._allow_new_keys and not force:
+                    raise KeyError(f"Key path {'.'.join(keys)} does not exist and allow_new_keys is False. Use force=True to override.")
+                current[key] = {}
+            elif not isinstance(current[key], dict):
+                # Convert non-dict values to dict to allow nested setting
+                current[key] = {}
+            current = current[key]
+            
+        # Check final key
+        if keys[-1] not in current and not self._allow_new_keys and not force:
+            raise KeyError(f"Key '{keys[-1]}' does not exist in path {'.'.join(keys[:-1])} and allow_new_keys is False. Use force=True to override.")
+            
+        # Set the final value
+        current[keys[-1]] = value
+    
+    def _validate_key_exists(self, keys) -> None:
+        """Validate that a key path exists in the configuration
+        
+        Args:
+            keys: Key path to validate
+            
+        Raises:
+            KeyError: If the key path doesn't exist
+        """
+        current = self._config
+        for i, key in enumerate(keys):
+            if not isinstance(current, dict) or key not in current:
+                key_path = '.'.join(keys[:i+1])
+                raise KeyError(f"Key path '{key_path}' does not exist and allow_new_keys is False. Use force=True to override.")
+            current = current[key]
+    
     def reload(self, config_path: Optional[Union[str, Path]] = None) -> None:
         """Reload configuration from file"""
         self._load_config(config_path)
-
-class Config:
-    """Configuration class for RAG Multimodal application
     
-    This class can be called with a config filepath to reload configurations:
-    ```python
-    from src.config import Config
-    
-    # Reload configuration from a custom file
-    Config.reload("path/to/custom/config.yaml")
-    
-    # Access updated configuration values
-    model = Config.MODEL
-    ```
-    """
-    
-    # Configuration loader instance
-    _loader = ConfigLoader()
-    
-    # Configuration schema with defaults
-    _CONFIG_SCHEMA = {
-        # API Keys (from environment)
-        'OPENAI_API_KEY': lambda: os.environ.get("OPENAI_API_KEY", ""),
+    def set_allow_new_keys(self, allow: bool) -> None:
+        """Set whether new keys are allowed to be created
         
-        # Model Configuration
-        'MODEL': ('model', 'text_generation', "gpt-4.1-mini"),
-        'EMBED_MODEL': ('model', 'embeddings', "text-embedding-3-small"),
-        'EMBED_MODEL_ID': ('model', 'tokenizer', "sentence-transformers/all-MiniLM-L6-v2"),
-        'MODEL_URL': ('model', 'url', "https://api.openai.com/v1/chat/completions"),
-        'MODEL_TIMEOUT': ('model', 'timeout', 60),
-        
-        # Document Processing
-        'IMAGE_RESOLUTION_SCALE': ('document', 'image_resolution_scale', 2),
-        'MAX_TOKENS': ('document', 'max_tokens', 512),
-        'DOC_DIR': ('document', 'doc_dir', "doc_sources"),
-        'SUPPORTED_FILE_TYPES': ('document', 'supported_file_types', [".pdf"]),
-        'PICTURE_DESC_PROMPT': ('document', 'picture_description', 'prompt_picture_description', 
-                               "Describe this image in sentences in a single paragraph."),
-        
-        # Vector Database Configuration
-        'URI': ('database', 'uri', "http://localhost:19530"),
-        'DB_NAME': ('database', 'name', "rag_multimodal"),
-        'DB_COLLECTION_NAME': ('database', 'collection_name', "collection_demo"),
-        'NAMESPACE': ('database', 'namespace', "CaseDoneDemo"),
-        'MILVUS_TOKEN': ('database', 'token', "root:Milvus"),
-        
-        # Retrieval Configuration
-        'RETRIEVAL_K': ('retrieval', 'k', 2),
-        'RETRIEVAL_WEIGHTS': ('retrieval', 'weights', [0.6, 0.4]),
-    }
+        Args:
+            allow: Whether to allow creation of new keys
+        """
+        self._allow_new_keys = allow
     
-    def __init_subclass__(cls, **kwargs):
-        super().__init_subclass__(**kwargs)
-        cls._load_attributes()
+    def get_allow_new_keys(self) -> bool:
+        """Get whether new keys are allowed to be created
+        
+        Returns:
+            bool: Current allow_new_keys setting
+        """
+        return self._allow_new_keys
     
-    @classmethod
-    def _load_attributes(cls) -> None:
-        """Load all configuration attributes from schema"""
-        for attr_name, config_def in cls._CONFIG_SCHEMA.items():
-            if callable(config_def):  # Environment variable
-                value = config_def()
-            else:  # YAML configuration
-                *keys, default = config_def
-                value = cls._loader.get(*keys, default=default)
-            setattr(cls, attr_name, value)
-    
-    @classmethod
-    @lru_cache(maxsize=1)
-    def get_picture_desc_api_options(cls) -> Dict[str, Any]:
-        """Get picture description API options (cached)"""
+    def get_milvus_connection_args(self) -> Dict[str, str]:
+        """Get Milvus connection arguments"""
         return {
-            "url": cls.MODEL_URL,
-            "prompt": cls.PICTURE_DESC_PROMPT,
-            "params": {"model": cls.MODEL},
-            "headers": {"Authorization": f"Bearer {cls.OPENAI_API_KEY}"},
-            "timeout": cls.MODEL_TIMEOUT,
+            "uri": self.get("database", "uri", default="http://localhost:19530"),
+            "token": self.get("database", "token", default="root:Milvus"),
+            "db_name": self.get("database", "name", default="rag_multimodal")
         }
     
-    @classmethod
-    def get_pdf_pipeline_options(cls) -> Dict[str, Any]:
+    def get_pdf_pipeline_options(self) -> Dict[str, Any]:
         """Get PDF pipeline options"""
         from docling.datamodel.pipeline_options import (
             PdfPipelineOptions,
             PictureDescriptionApiOptions
         )
         
-        # Get options once and reuse
-        api_options = cls.get_picture_desc_api_options()
+        # Get API configuration
+        openai_api_key = os.environ.get("OPENAI_API_KEY", "")
+        model_url = self.get("model", "url", default="https://api.openai.com/v1/chat/completions")
+        model_name = self.get("model", "text_generation", default="gpt-4.1-mini")
+        model_timeout = self.get("model", "timeout", default=60)
+        picture_prompt = self.get("document", "picture_description", "prompt_picture_description", 
+                                default="Describe this image in sentences in a single paragraph.")
+        image_scale = self.get("document", "image_resolution_scale", default=2)
+        
         picture_desc_api_option = PictureDescriptionApiOptions(
-            url=api_options["url"],
-            prompt=api_options["prompt"],
-            params=api_options["params"],
-            headers=api_options["headers"],
-            timeout=api_options["timeout"],
+            url=model_url,
+            prompt=picture_prompt,
+            params={"model": model_name},
+            headers={"Authorization": f"Bearer {openai_api_key}"},
+            timeout=model_timeout,
         )
         
         return PdfPipelineOptions(
-            images_scale=cls.IMAGE_RESOLUTION_SCALE,
+            images_scale=image_scale,
             generate_picture_images=True,
             do_picture_description=True,
             picture_description_options=picture_desc_api_option,
             enable_remote_services=True,  # to access remote API
         )
-    
-    @classmethod
-    def get_milvus_connection_args(cls) -> Dict[str, str]:
-        """Get Milvus connection arguments"""
-        return {
-            "uri": cls.URI,
-            "token": cls.MILVUS_TOKEN,
-            "db_name": cls.DB_NAME
-        }
-    
-    @classmethod
-    def reload(cls, config_filepath: Optional[str] = None) -> None:
-        """Reload configuration from the specified file path
-        
-        Args:
-            config_filepath: Optional path to the configuration YAML file to reload from
-        """
-        # Clear cache for get_picture_desc_api_options
-        cls.get_picture_desc_api_options.cache_clear()
-        
-        if config_filepath is not None:
-            # Validate file path
-            config_path = Path(config_filepath)
-            if not config_path.exists():
-                raise FileNotFoundError(f"Configuration file not found: {config_filepath}")
-                
-            # Reload the configuration loader with new file
-            cls._loader.reload(config_filepath)
-        else:
-            # Reload with default config file
-            cls._loader.reload()
-            
-        # Refresh all attributes
-        cls._load_attributes()
-        
-        # Update module-level variables for backward compatibility
-        _update_module_variables()
 
-
-def _update_module_variables():
-    """Update module-level variables for backward compatibility"""
-    # Get current module
-    import sys
-    current_module = sys.modules[__name__]
-    
-    # Update all attributes dynamically
-    for attr_name in Config._CONFIG_SCHEMA.keys():
-        setattr(current_module, attr_name, getattr(Config, attr_name))
-
-# Initialize Config class attributes and module-level variables
-Config._load_attributes()
-_update_module_variables()
+# Create a default configuration instance
+config = ConfigLoader()
