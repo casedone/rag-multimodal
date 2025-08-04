@@ -5,3 +5,7 @@ poetry.lock
 notebooks-scratch
 logs/*
 logs/.gitkeep
+*graph.png
+notebooks/outputs
+notebooks/outputs
+notebooks/doc_folder*
