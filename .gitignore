@@ -9,3 +9,4 @@ logs/.gitkeep
 notebooks/outputs
 notebooks/outputs
 notebooks/doc_folder*
+notebooks/logs
